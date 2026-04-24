@@ -27,21 +27,79 @@ export function sheetToRows(workbook: XLSX.WorkBook, sheetName: string): ParsedD
   return { rows, columns, sheetNames: workbook.SheetNames };
 }
 
+export function parseFlexibleDate(value: unknown): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+
+  // Excel serial number (days since 1899-12-30)
+  if (typeof value === "number") {
+    if (value > 59 && value < 80000) {
+      const ms = Math.round((value - 25569) * 86400 * 1000);
+      const d = new Date(ms);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+  }
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // ISO yyyy-mm-dd or yyyy/mm/dd (optionally with time)
+  const iso = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:[T\s].*)?$/);
+  if (iso) {
+    const y = +iso[1], m = +iso[2], d = +iso[3];
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const dt = new Date(Date.UTC(y, m - 1, d));
+      if (dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) return dt;
+    }
+    return null;
+  }
+
+  // dd/mm/yyyy, dd-mm-yyyy, mm/dd/yyyy (heuristic: prefer dd/mm if first > 12)
+  const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})(?:\s.*)?$/);
+  if (dmy) {
+    let a = +dmy[1], b = +dmy[2];
+    let y = +dmy[3];
+    if (y < 100) y += 2000;
+    let day: number, month: number;
+    if (a > 12) { day = a; month = b; }
+    else if (b > 12) { month = a; day = b; }
+    else { day = a; month = b; } // default to dd/mm
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const dt = new Date(Date.UTC(y, month - 1, day));
+    if (dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day) return dt;
+    return null;
+  }
+
+  // Fallback to native parser, but reject epoch (1970-01-01) sentinel
+  const native = new Date(s);
+  if (!isNaN(native.getTime()) && native.getUTCFullYear() > 1970) return native;
+  return null;
+}
+
 export function detectDateColumn(rows: DataRow[], columns: string[]): string | null {
   let best: { col: string; ratio: number } | null = null;
   for (const col of columns) {
+    // Skip obvious id-like columns
+    const lower = col.toLowerCase();
+    if (lower === "id" || lower.endsWith(" id") || lower.endsWith("_id") || lower.endsWith("id")) {
+      // still allow if name explicitly contains "date"
+      if (!lower.includes("date") && !lower.includes("time")) continue;
+    }
     let ok = 0;
     let total = 0;
     for (const r of rows.slice(0, 100)) {
       const v = r[col];
       if (v === null || v === undefined || v === "") continue;
       total++;
-      const d = new Date(v as string);
-      if (!isNaN(d.getTime())) ok++;
+      if (parseFlexibleDate(v)) ok++;
     }
     if (total === 0) continue;
     const ratio = ok / total;
-    if (ratio > 0.7 && (!best || ratio > best.ratio)) best = { col, ratio };
+    // Boost columns whose name suggests a date
+    const nameBoost = lower.includes("date") || lower.includes("time") ? 0.2 : 0;
+    const score = ratio + nameBoost;
+    if (ratio > 0.7 && (!best || score > best.ratio)) best = { col, ratio: score };
   }
   return best?.col ?? null;
 }

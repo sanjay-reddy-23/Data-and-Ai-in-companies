@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import type { DataRow } from "@/types/insight";
-import { detectCategoricalColumns, detectDateColumn, detectNumericColumns } from "@/lib/data";
+import { detectCategoricalColumns, detectDateColumn, detectNumericColumns, parseFlexibleDate } from "@/lib/data";
 
 interface Props {
   rows: DataRow[];
@@ -29,10 +29,8 @@ export function TimeSeriesChart({ rows, columns }: Props) {
     const seriesSet = new Set<string>();
 
     for (const r of rows) {
-      const dRaw = r[dateCol];
-      if (dRaw === null || dRaw === undefined || dRaw === "") continue;
-      const d = new Date(dRaw as string);
-      if (isNaN(d.getTime())) continue;
+      const d = parseFlexibleDate(r[dateCol]);
+      if (!d) continue;
       const key = d.toISOString().slice(0, 10);
       const value = Number(r[metric]);
       if (isNaN(value)) continue;
